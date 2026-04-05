@@ -1,0 +1,13 @@
+{
+    "dayz_dir":         "C:/Program Files (x86)/Steam/steamapps/common/DayZ",
+    "dayz_server_dir":  "C:/Program Files (x86)/Steam/steamapps/common/DayZServer",
+    "dayz_tools_dir":   "C:/Program Files (x86)/Steam/steamapps/common/DayZ Tools",
+    "mod_source_dir":   "P:/dayz-ss-collector/mod",
+    "mod_name":         "@dayz-ss-collector",
+    "logs_dir":         "C:/Users/itisluiz/AppData/Local/DayZ",
+    "server_config":    "serverDZ.cfg",
+    "server_host":      "127.0.0.1",
+    "server_port":      2302,
+    "server_extra_args": ["-filePatching"],
+    "client_extra_args": []
+}
