@@ -1,37 +1,6 @@
 class SSCMetaWriter
 {
-    // Returns unix timestamp in seconds as an int (fits int32 until ~2038).
-    // Uses real-world server date from GetDate(), not in-game time.
-    static int ComputeUnixSeconds()
-    {
-        int year, month, day, hour, minute;
-        GetGame().GetWorld().GetDate(year, month, day, hour, minute);
-
-        // Leap years from year 1 up to (year-1), minus offset for years before 1970.
-        // Offset = floor(1969/4) - floor(1969/100) + floor(1969/400) = 492 - 19 + 4 = 477
-        int prevYear = year - 1;
-        int leapDays = (prevYear / 4) - (prevYear / 100) + (prevYear / 400) - 477;
-        int days = (year - 1970) * 365 + leapDays;
-
-        // Add completed months
-        bool isLeap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-        if (month > 1)  days += 31;
-        if (month > 2 && isLeap)  days += 29;
-        if (month > 2 && !isLeap) days += 28;
-        if (month > 3)  days += 31;
-        if (month > 4)  days += 30;
-        if (month > 5)  days += 31;
-        if (month > 6)  days += 30;
-        if (month > 7)  days += 31;
-        if (month > 8)  days += 31;
-        if (month > 9)  days += 30;
-        if (month > 10) days += 31;
-        if (month > 11) days += 30;
-
-        days += day - 1;
-
-        return days * 86400 + hour * 3600 + minute * 60;
-    }
+    static int s_Counter = 0;
 
     static void Write(PlayerBase player, vector cameraDir)
     {
@@ -44,12 +13,21 @@ class SSCMetaWriter
         MakeDirectory("$profile:SSCollector");
         MakeDirectory(outDir);
 
-        int ts = ComputeUnixSeconds();
-        string tsStr = "" + ts + "000";
-        string filename = outDir + "/ss-meta-" + tsStr + ".json";
+        s_Counter++;
+        string filename = outDir + "/ss-meta-" + s_Counter + ".json";
 
         vector pos = player.GetPosition();
         float tod = GetGame().GetDayTime();
+
+        string worldName;
+        GetGame().GetWorldName(worldName);
+
+        Weather w = GetGame().GetWeather();
+        float overcast  = w.GetOvercast().GetActual();
+        float rain      = w.GetRain().GetActual();
+        float fog       = w.GetFog().GetActual();
+        float snowfall  = w.GetSnowfall().GetActual();
+        float windSpeed = w.GetWindSpeed();
 
         FileHandle fh = OpenFile(filename, FileMode.WRITE);
         if (fh == 0)
@@ -59,7 +37,7 @@ class SSCMetaWriter
         }
 
         FPrintln(fh, "{");
-        FPrintln(fh, "    \"timestamp\": " + tsStr + ",");
+        FPrintln(fh, "    \"map\": \"" + worldName + "\",");
         FPrintln(fh, "    \"position\": {");
         FPrintln(fh, "        \"x\": " + pos[0] + ",");
         FPrintln(fh, "        \"y\": " + pos[1] + ",");
@@ -70,7 +48,14 @@ class SSCMetaWriter
         FPrintln(fh, "        \"y\": " + cameraDir[1] + ",");
         FPrintln(fh, "        \"z\": " + cameraDir[2]);
         FPrintln(fh, "    },");
-        FPrintln(fh, "    \"timeOfDay\": " + tod);
+        FPrintln(fh, "    \"timeOfDay\": " + tod + ",");
+        FPrintln(fh, "    \"weather\": {");
+        FPrintln(fh, "        \"overcast\": " + overcast + ",");
+        FPrintln(fh, "        \"rain\": " + rain + ",");
+        FPrintln(fh, "        \"fog\": " + fog + ",");
+        FPrintln(fh, "        \"snowfall\": " + snowfall + ",");
+        FPrintln(fh, "        \"windSpeed\": " + windSpeed);
+        FPrintln(fh, "    }");
         FPrintln(fh, "}");
 
         CloseFile(fh);

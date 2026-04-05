@@ -1,9 +1,24 @@
 modded class MissionGameplay
 {
+    protected UAInput m_SSCCaptureInput;
+
     override void OnInit()
     {
         super.OnInit();
+        m_SSCCaptureInput = GetUApi().GetInputByName("UASSCCaptureMeta");
+        if (m_SSCCaptureInput)
+            Print("[SSCollector] UASSCCaptureMeta input registered OK.");
+        else
+            Print("[SSCollector] UASSCCaptureMeta input NOT FOUND - inputs.xml not loaded!");
         Print("[SSCollector] MissionGameplay initialized on client.");
+    }
+
+    override void OnUpdate(float timeslice)
+    {
+        super.OnUpdate(timeslice);
+
+        if (m_SSCCaptureInput && m_SSCCaptureInput.LocalPress())
+            SendCaptureMeta();
     }
 
     override void OnEvent(EventType eventTypeId, Param params)
@@ -36,6 +51,6 @@ modded class MissionGameplay
         rpc.Write(cameraDir);
         rpc.Send(player, SSCRpc.CAPTURE_META, true, null);
 
-        Print("[SSCollector] /ss-meta sent. cameraDir=" + cameraDir);
+        Print("[SSCollector] Capture meta sent. cameraDir=" + cameraDir);
     }
 }

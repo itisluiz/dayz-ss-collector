@@ -20,6 +20,7 @@ class CfgMods
         dir = "dayz-ss-collector";
         name = "DayZ SS Collector";
         author = "itisluiz";
+        inputs = "dayz-ss-collector/mod/Scripts/data/inputs.xml";
         type = "mod";
         dependencies[] = { "Game", "World", "Mission" };
 

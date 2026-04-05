@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<modded_inputs>
+    <inputs>
+        <actions>
+            <input name="UASSCCaptureMeta" loc="Capture Meta" />
+            <input name="UASSCPrevLocation" loc="Previous location" />
+            <input name="UASSCNextLocation" loc="Next location" />
+        </actions>
+
+        <sorting name="sscollector" loc="SSCollector">
+            <input name="UASSCCaptureMeta" />
+            <input name="UASSCPrevLocation" />
+            <input name="UASSCNextLocation" />
+        </sorting>
+    </inputs>
+    <preset>
+    </preset>
+</modded_inputs>
