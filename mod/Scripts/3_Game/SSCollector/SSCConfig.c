@@ -3,6 +3,13 @@ class SSCConfig
     // Subdirectory under $profile:SSCollector/ where meta files are written.
     // Example: "output" -> Documents\DayZ Other Profiles\Server\SSCollector\output\
     string outputDir = "output";
+
+    // Playable area bounds used by /ss-generate.
+    // Defaults cover Chernarus (~15360×15360m). Override in config.json for other maps.
+    float mapMinX = 0.0;
+    float mapMaxX = 15360.0;
+    float mapMinZ = 0.0;
+    float mapMaxZ = 15360.0;
 }
 
 class SSCConfigManager

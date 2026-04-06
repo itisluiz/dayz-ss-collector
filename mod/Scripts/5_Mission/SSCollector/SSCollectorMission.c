@@ -4,6 +4,7 @@ modded class MissionServer
     {
         super.OnInit();
         SSCConfigManager.Init();
+        SSCNavigator.Init();
         Print("[SSCollector] Server mission initialized.");
     }
 };
