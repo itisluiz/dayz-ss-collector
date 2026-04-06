@@ -4,10 +4,6 @@ modded class MissionGameplay
     protected UAInput m_SSCPrevInput;
     protected UAInput m_SSCNextInput;
 
-    protected bool  m_SSCOrientActive = false;
-    protected float m_SSCOrientYaw    = 0;
-    protected float m_SSCOrientPitch  = 0;
-
     override void OnInit()
     {
         super.OnInit();
@@ -50,16 +46,13 @@ modded class MissionGameplay
         if (SSCCameraCommand.pending)
         {
             SSCCameraCommand.pending = false;
-            m_SSCOrientYaw    = SSCCameraCommand.yaw;
-            m_SSCOrientPitch  = SSCCameraCommand.pitch;
-            m_SSCOrientActive = true;
-        }
-
-        if (m_SSCOrientActive)
-        {
-            PlayerBase player = PlayerBase.Cast(GetGame().GetPlayer());
-            if (player)
-                player.SetOrientation(Vector(m_SSCOrientYaw, m_SSCOrientPitch, 0));
+            FreeDebugCamera cam = FreeDebugCamera.GetInstance();
+            if (cam)
+            {
+                cam.SetPosition(Vector(SSCCameraCommand.x, SSCCameraCommand.y, SSCCameraCommand.z));
+                cam.SetOrientation(Vector(SSCCameraCommand.yaw, SSCCameraCommand.pitch, 0));
+                cam.SetActive(true);
+            }
         }
     }
 
@@ -145,6 +138,14 @@ modded class MissionGameplay
             if (msg == "/ss-god")
             {
                 SendToggleGod();
+                return;
+            }
+
+            if (msg == "/ss-freecam")
+            {
+                FreeDebugCamera cam = FreeDebugCamera.GetInstance();
+                if (cam)
+                    cam.SetActive(!cam.IsActive());
                 return;
             }
         }

@@ -110,11 +110,16 @@ modded class PlayerBase
     protected bool m_SSCGodMode  = false;
 
     // Time/weather presets used by both SSC_AddLocation and SSC_GenerateGrid.
-    // { morning-clear, midday-clear, afternoon-overcast, evening }
-    static float s_pTime[4]     = { 8.0,  12.0, 15.0,  18.5 };
-    static float s_pOvercast[4] = { 0.1,   0.0,  0.55,  0.2 };
-    static float s_pFog[4]      = { 0.1,   0.0,  0.0,   0.1 };
-    static float s_pRain[4]     = { 0.0,   0.0,  0.0,   0.0 };
+    // No fog — it hides landmarks and hurts coordinate regression.
+    // Preset order matters: generation loops preset-first so all entries for one
+    // time are consecutive, meaning time only changes at group boundaries during
+    // playback — avoids per-shot lighting transitions.
+    // { pre-dawn, overcast-noon, dusk, night }
+    // 5.5 = deep blue pre-dawn; 12 overcast = flat/shadowless; 19 = golden dusk; 22 = night
+    static float s_pTime[4]     = {  5.5,  12.0,  19.0,  22.0 };
+    static float s_pOvercast[4] = {  0.0,   0.7,   0.0,   0.0 };
+    static float s_pFog[4]      = {  0.0,   0.0,   0.0,   0.0 };
+    static float s_pRain[4]     = {  0.0,   0.0,   0.0,   0.0 };
 
     // Server-side: step the index by `delta` (+1 next / -1 prev), apply the
     // resulting location, and fire a SET_CAMERA reply to this player's client.
@@ -141,11 +146,11 @@ modded class PlayerBase
         }
 
         // ── Teleport ─────────────────────────────────────────────────────────
-        if (loc.position)
-        {
-            vector pos = Vector(loc.position.x, loc.position.y, loc.position.z);
-            SetPosition(pos);
-        }
+        // FreeDebugCamera is positioned independently on the client, so the player
+        // does not need to be at the shot location. Teleporting would put the character
+        // model inside the camera frustum and clip the shot. The player must simply be
+        // within terrain-streaming range (~1 km) of the locations they intend to shoot.
+        // (no-op: player position unchanged)
 
         // ── Weather (server-wide, instantaneous, held for 1 hour) ────────────
         if (loc.weather)
@@ -205,14 +210,16 @@ modded class PlayerBase
         float yawStep  = 360.0 / yawCount;
         int   added    = 0;
 
-        for (int i = 0; i < yawCount; i++)
+        // Preset is the outer loop so all entries for a given time are consecutive.
+        // During playback, time only changes at group boundaries — no per-shot transitions.
+        for (int p = 0; p < 4; p++)
         {
-            float yawDeg = yawStep * i;
-            if (!SSCNavigator.IsClearAngle(eyePos, yawDeg, pitchDeg, 100.0, 5.0, this))
-                continue;
-
-            for (int p = 0; p < 4; p++)
+            for (int i = 0; i < yawCount; i++)
             {
+                float yawDeg = yawStep * i;
+                if (!SSCNavigator.IsClearAngle(eyePos, yawDeg, pitchDeg, 100.0, 5.0, this))
+                    continue;
+
                 SSCLocation loc      = new SSCLocation();
                 loc.position         = new SSCLocationPos();
                 loc.position.x       = snapPos[0];
@@ -251,28 +258,30 @@ modded class PlayerBase
         int   added    = 0;
         int   seaSkip  = 0;
 
-        for (float x = minX; x <= maxX; x += step)
+        // Preset is the outer loop so all entries for a given time are consecutive.
+        // During playback, time only changes at group boundaries — no per-shot transitions.
+        for (int p = 0; p < 4; p++)
         {
-            for (float z = minZ; z <= maxZ; z += step)
+            for (float x = minX; x <= maxX; x += step)
             {
-                if (GetGame().SurfaceIsSea(x, z))
+                for (float z = minZ; z <= maxZ; z += step)
                 {
-                    seaSkip++;
-                    continue;
-                }
-
-                float  floorY  = GetGame().SurfaceRoadY(x, z);
-                vector snapPos = Vector(x, floorY, z);
-                vector eyePos  = Vector(x, floorY + 1.5, z);
-
-                for (int i = 0; i < yawCount; i++)
-                {
-                    float yawDeg = yawStep * i;
-                    if (!SSCNavigator.IsClearAngle(eyePos, yawDeg, pitchDeg, 100.0, 5.0, this))
-                        continue;
-
-                    for (int p = 0; p < 4; p++)
+                    if (GetGame().SurfaceIsSea(x, z))
                     {
+                        if (p == 0) seaSkip++; // count once
+                        continue;
+                    }
+
+                    float  floorY  = GetGame().SurfaceRoadY(x, z);
+                    vector snapPos = Vector(x, floorY, z);
+                    vector eyePos  = Vector(x, floorY + 1.5, z);
+
+                    for (int i = 0; i < yawCount; i++)
+                    {
+                        float yawDeg = yawStep * i;
+                        if (!SSCNavigator.IsClearAngle(eyePos, yawDeg, pitchDeg, 100.0, 5.0, this))
+                            continue;
+
                         SSCLocation loc      = new SSCLocation();
                         loc.position         = new SSCLocationPos();
                         loc.position.x       = snapPos[0];

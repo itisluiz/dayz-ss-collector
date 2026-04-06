@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(*)",
-      "Read(*)"
+      "Read(*)",
+      "WebSearch",
+      "WebFetch(*)"
     ]
   }
 }
