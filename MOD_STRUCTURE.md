@@ -1,6 +1,6 @@
 # SSCollector — Mod Structure
 
-A DayZ server mod for collecting labeled screenshots to train a coordinate-recognition ML model. The player cycles through pre-generated locations; at each one, the server teleports them, applies weather and time of day, and orients the camera. The player captures a metadata JSON, takes a screenshot, and moves on.
+A DayZ server mod for collecting labeled screenshots to train a coordinate-recognition ML model. The player cycles through pre-generated locations; at each one, the server applies weather and time of day and orients FreeDebugCamera. The Python automation script navigates, captures metadata, takes screenshots, and saves state for overnight unattended runs.
 
 ---
 
@@ -22,6 +22,14 @@ mod/
 │   └── 5_Mission/SSCollector/
 │       ├── SSCClientChat.c      — MissionGameplay: keybinds, chat commands, RPC senders
 │       └── SSCollectorMission.c — MissionServer.OnInit: boots config + navigator
+
+scripts/
+├── collect.py       — Automated screenshot capture loop (Python, Windows)
+├── settings.json    — Paths: logs_dir, ahk_path
+├── requirements.txt — pywin32, mss, pynput
+└── ...              — Other dev scripts (launch, pack, etc.)
+
+collect.bat          — One-click launcher for collect.py
 ```
 
 ---
@@ -37,29 +45,27 @@ Client: /ss-add [N]  or  /ss-generate <step> [N]
   → For each grid/player position:
       • SurfaceRoadY  → snap to floor height
       • IsClearAngle  → raycast (BUILDING|TERRAIN|ROADWAY) rejects wall-facing angles
-      • 4 preset entries written per valid angle (morning / midday / afternoon / evening)
+      • 4 preset entries written per valid angle (pre-dawn / overcast-noon / dusk / night)
   → SSCNavigator.Save() writes $profile:SSCollector/locations.json
 ```
 
 ### Navigation
 
 ```
-Client: UASSCNextLocation / UASSCPrevLocation keybind
-  → SSCClientChat sends NAVIGATE RPC (delta +1 / -1)
-  → PlayerBase.SSC_Navigate (SSCNavigator.c):
-      • Advances m_SSCLocIndex (wraps around, first press always lands on index 0)
-      • SetPosition           → teleports player
-      • Weather.Set           → applies overcast/fog/rain server-wide for 1 hour
-      • GetWorld().SetDate    → sets time of day (keeps calendar date)
+Client: UASSCNextLocation / UASSCPrevLocation keybind  — or —  /ss-goto <N>
+  → SSCClientChat sends NAVIGATE (delta ±1) or SET_INDEX (absolute index) RPC
+  → PlayerBase.SSC_Navigate / SSC_GoTo (SSCNavigator.c):
+      • Updates m_SSCLocIndex
+      • Weather.Set  → applies overcast/fog/rain server-wide for 1 hour
+      • GetWorld().SetDate  → sets time of day (keeps calendar date)
       • Sends SET_CAMERA RPC  → eye position (floor+1.5m) + yaw + pitch
-  → PlayerBase.OnRPC client side writes yaw/pitch to SSCCameraCommand statics (3_Game)
+  → PlayerBase.OnRPC client side writes data to SSCCameraCommand statics (3_Game)
   → MissionGameplay.OnUpdate (SSCClientChat.c):
       • Detects SSCCameraCommand.pending
-      • Stores yaw/pitch, sets m_SSCOrientActive = true
-      • Calls player.SetOrientation(Vector(yaw, pitch, 0)) every frame while active
+      • Places and activates FreeDebugCamera at the given eye position + orientation
 ```
 
-**Known limitation — camera pitch:** DayZ's first-person camera pitch is driven by an engine-internal aim accumulator that is not writable from script. `SetOrientation` sets the entity transform but the accumulator fights it, causing visible oscillation. Yaw (horizontal) is mostly stable. The eye position sent in SET_CAMERA is stored in `SSCCameraCommand` but currently unused — `FreeDebugCamera` and `GetFreeDebugCamera()` are not available in standard (non-diagnostic) builds.
+**Note — player position:** The player character is NOT teleported to the shot location. `FreeDebugCamera` is positioned independently. The player only needs to be within terrain-streaming range (~1 km). Use `/ss-exile` at session start to move the character to the map corner and away from zombie spawn zones.
 
 ### Screenshot capture
 
@@ -68,9 +74,31 @@ Client: UASSCCaptureMeta keybind  or  /ss-meta
   → SSCClientChat reads GetCurrentCameraDirection()
   → Sends CAPTURE_META RPC to server
   → SSCMetaWriter.Write (SSCMeta.c) runs server-side:
+      • locationIndex (current m_SSCLocIndex)
       • Player world position
       • Server-side weather actuals + time of day + world name
       • Writes $profile:SSCollector/output/ss-meta-N.json
+```
+
+### Automated capture (collect.py)
+
+```
+python scripts/collect.py  (or double-click collect.bat)
+
+  1. Find DayZ_x64.exe window for screenshots
+  2. Wait for HOME keypress (user focuses DayZ first)
+  3. Send /ss-exile + /ss-freecam via AutoHotkey
+  4. For each index in [start, total):
+       a. Skip if ss-<N>.png + ss-<N>.json already exist (resume safety)
+       b. Send /ss-goto <N> via AHK
+       c. Wait --delay seconds (default 1.5s) for lighting to settle
+       d. Snapshot existing ss-meta-*.json files
+       e. Send /ss-meta via AHK
+       f. Poll for new ss-meta-*.json with matching locationIndex (8s timeout)
+       g. Screenshot DayZ window → ss-<N>.png
+       h. Rename matched JSON → ss-<N>.json
+       i. Save state to output/collect_state.json
+  5. HOME toggles pause/resume mid-run; Ctrl+C saves state and exits cleanly
 ```
 
 ---
@@ -81,7 +109,7 @@ Client: UASSCCaptureMeta keybind  or  /ss-meta
 
 **`SSCCameraCommand`** — Static cross-layer message bus. Written by `PlayerBase.OnRPC` in 4_World and read by `MissionGameplay.OnUpdate` in 5_Mission, because `FreeDebugCamera` lives in 5_Mission and is unreachable from 4_World.
 
-Fields: `pending` (bool), `x / y / z` (eye position, currently unused), `yaw`, `pitch`.
+Fields: `pending` (bool), `x / y / z` (eye position), `yaw`, `pitch`.
 
 **`SSCRpc`** — RPC type ID constants.
 
@@ -95,6 +123,8 @@ Fields: `pending` (bool), `x / y / z` (eye position, currently unused), `yaw`, `
 | `GENERATE_GRID` | 20006 | client → server | `int step, yawCount` |
 | `RELOAD` | 20007 | client → server | *(none)* |
 | `TOGGLE_GOD` | 20008 | client → server | *(none)* |
+| `SET_INDEX` | 20009 | client → server | `int index` |
+| `EXILE` | 20010 | client → server | *(none)* |
 
 All RPCs use `guaranteed = true`.
 
@@ -152,21 +182,24 @@ SSCLocationList
 
 | Method | RPC trigger | Notes |
 |--------|------------|-------|
-| `SSC_Navigate(delta)` | NAVIGATE | Teleport + weather + time + SET_CAMERA reply |
+| `SSC_ApplyLocation(index)` | *(internal)* | Apply time/weather/camera for a given index without changing m_SSCLocIndex |
+| `SSC_Navigate(delta)` | NAVIGATE | Advance m_SSCLocIndex ±1, call SSC_ApplyLocation |
+| `SSC_GoTo(index)` | SET_INDEX | Jump directly to index (clamped), call SSC_ApplyLocation |
 | `SSC_AddLocation(yawCount)` | ADD_LOCATION | Floor-snap, raycast filter, 4 presets per valid angle |
 | `SSC_GenerateGrid(step, yawCount)` | GENERATE_GRID | Same as AddLocation over full map grid; skips sea |
 | `SSC_ClearLocations()` | CLEAR_LOCATIONS | Wipe + save |
 | `SSC_Reload()` | RELOAD | Re-reads locations.json without restart |
 | `SSC_ToggleGod()` | TOGGLE_GOD | Toggle `m_SSCGodMode`; see God mode section |
+| `SSC_Exile()` | EXILE | Teleport player to (mapMinX+200, mapMinZ+200) |
 
-**Generation presets** (4 entries per valid yaw angle):
+**Generation presets** (4 entries per valid yaw angle, preset is the outer loop so time only changes at group boundaries during playback):
 
-| Preset | Time | Overcast | Fog | Rain |
-|--------|------|---------|-----|------|
-| Morning | 08:00 | 0.1 | 0.1 | 0.0 |
-| Midday | 12:00 | 0.0 | 0.0 | 0.0 |
-| Afternoon | 15:00 | 0.55 | 0.0 | 0.0 |
-| Evening | 18:30 | 0.2 | 0.1 | 0.0 |
+| Preset | Time | Overcast | Fog | Rain | Notes |
+|--------|------|---------|-----|------|-------|
+| Pre-dawn | 05:30 | 0.0 | 0.0 | 0.0 | Deep blue sky |
+| Overcast noon | 12:00 | 0.7 | 0.0 | 0.0 | Flat, shadowless |
+| Dusk | 19:00 | 0.0 | 0.0 | 0.0 | Golden hour |
+| Night | 22:00 | 0.0 | 0.0 | 0.0 | Dark |
 
 **God mode** (`m_SSCGodMode` bool, per-player):
 - `SetAllowDamage(false)` — blocks all incoming damage
@@ -180,24 +213,27 @@ SSCLocationList
 
 ### `4_World/SSCollector/SSCMeta.c`
 
-**`SSCMetaWriter.Write(player, cameraDir)`** — Writes one JSON file per call.
+**`SSCMetaWriter.Write(player, cameraDir, locationIndex)`** — Writes one JSON file per call.
 
 Output path: `$profile:SSCollector/{outputDir}/ss-meta-{counter}.json`
 
+Counter is process-scoped and resets on server restart. `cameraDirection` comes from the client's `GetCurrentCameraDirection()` at capture time.
+
 ```json
 {
+    "locationIndex": 42,
     "map": "chernarusplus",
     "position":        { "x": 6500.0, "y": 200.3, "z": 6500.0 },
     "cameraDirection": { "x": 0.71,   "y": -0.09, "z": 0.71   },
     "timeOfDay": 12.0,
     "weather": {
-        "overcast": 0.0, "rain": 0.0, "fog": 0.0,
+        "overcast": 0.7, "rain": 0.0, "fog": 0.0,
         "snowfall": 0.0, "windSpeed": 3.2
     }
 }
 ```
 
-Counter is process-scoped and resets on server restart. `cameraDirection` comes from the client's `GetCurrentCameraDirection()` at capture time.
+`locationIndex` is the server-side `m_SSCLocIndex` at the time of capture — used by `collect.py` to match the file to the correct screenshot.
 
 ---
 
@@ -213,9 +249,9 @@ Counter is process-scoped and resets on server restart. `cameraDirection` comes 
 
 Keybind inputs cached in `OnInit`: `UASSCCaptureMeta`, `UASSCPrevLocation`, `UASSCNextLocation`.
 
-Camera orientation state: `m_SSCOrientActive`, `m_SSCOrientYaw`, `m_SSCOrientPitch` — set when `SSCCameraCommand.pending` is true; `SetOrientation` called every frame while active.
+`OnEvent(ChatMessageEventTypeID)` intercepts `/ss-*` commands **before** calling `super.OnEvent()`, so they are never rendered in the HUD chat widget.
 
-Chat commands parsed in `OnEvent(ChatMessageEventTypeID)` (message lowercased before matching):
+Chat commands (message is lowercased before matching):
 
 | Command | Sender method |
 |---------|--------------|
@@ -225,6 +261,11 @@ Chat commands parsed in `OnEvent(ChatMessageEventTypeID)` (message lowercased be
 | `/ss-clear` | `SendClearLocations()` |
 | `/ss-reload` | `SendReload()` |
 | `/ss-god` | `SendToggleGod()` |
+| `/ss-exile` | `SendExile()` |
+| `/ss-freecam` | Toggle `FreeDebugCamera` locally (no RPC) |
+| `/ss-goto <N>` | `SendSetIndex(N)` |
+
+`OnUpdate` applies `SSCCameraCommand` when pending: places `FreeDebugCamera` at the given eye position and orientation and calls `cam.SetActive(true)`.
 
 ---
 
@@ -240,10 +281,12 @@ Chat commands parsed in `OnEvent(ChatMessageEventTypeID)` (message lowercased be
 
 ## Persistent Files
 
-All under `$profile:SSCollector/` (e.g. `Documents/DayZ Other Profiles/Server/SSCollector/`).
+All mod files under `$profile:SSCollector/` (e.g. `Documents/DayZ Other Profiles/Server/SSCollector/`).
 
 | File | Written by | When |
 |------|-----------|------|
 | `config.json` | `SSCConfigManager.Init()` | First server run; edit manually to change map bounds |
 | `locations.json` | `SSCNavigator.Save()` | After any generate/add/clear/reload operation |
-| `output/ss-meta-N.json` | `SSCMetaWriter.Write()` | On each capture trigger |
+| `output/ss-meta-N.json` | `SSCMetaWriter.Write()` | On each capture trigger; renamed to `ss-N.json` by collect.py |
+| `output/ss-N.png` | `collect.py` | Screenshot taken after metadata confirmed |
+| `output/collect_state.json` | `collect.py` | `{ "next_index": N }` — survives Ctrl+C / crashes for resume |

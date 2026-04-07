@@ -58,96 +58,127 @@ modded class MissionGameplay
 
     override void OnEvent(EventType eventTypeId, Param params)
     {
-        super.OnEvent(eventTypeId, params);
-
+        // Intercept SSC commands BEFORE calling super so they never reach the HUD
+        // chat widget. super.OnEvent() is what renders the message on screen.
         if (eventTypeId == ChatMessageEventTypeID)
         {
             Param4<int, string, string, string> chatParams;
-            if (!Class.CastTo(chatParams, params))
-                return;
-
-            string msg = chatParams.param3;
-            msg.ToLower();
-
-            if (msg == "/ss-meta")
+            if (Class.CastTo(chatParams, params))
             {
-                SendCaptureMeta();
-                return;
-            }
+                string msg = chatParams.param3;
+                msg.ToLower();
 
-            // /ss-add [N]  — N is optional, defaults to 8
-            if (msg == "/ss-add" || msg.IndexOf("/ss-add ") == 0)
-            {
-                int addYawCount = 8;
-                if (msg.Length() > 8)
+                if (msg.IndexOf("/ss-") == 0)
                 {
-                    string numStr = msg.Substring(8, msg.Length() - 8);
-                    numStr.TrimInPlace();
-                    int parsed = numStr.ToInt();
-                    if (parsed > 0)
-                        addYawCount = parsed;
+                    HandleSSCCommand(msg);
+                    return;  // swallow — do NOT call super, stays off HUD
                 }
-                SendAddLocation(addYawCount);
-                return;
             }
+        }
 
-            // /ss-generate <step> [N]  — step is required, N defaults to 8
-            if (msg.IndexOf("/ss-generate ") == 0)
+        super.OnEvent(eventTypeId, params);
+    }
+
+    // Dispatch an already-lowercased /ss-* command string.
+    protected void HandleSSCCommand(string msg)
+    {
+        if (msg == "/ss-meta")
+        {
+            SendCaptureMeta();
+            return;
+        }
+
+        // /ss-add [N]  — N is optional, defaults to 8
+        if (msg == "/ss-add" || msg.IndexOf("/ss-add ") == 0)
+        {
+            int addYawCount = 8;
+            if (msg.Length() > 8)
             {
-                string args = msg.Substring(13, msg.Length() - 13);
-                args.TrimInPlace();
-
-                int spaceIdx = args.IndexOf(" ");
-                int step, genYawCount = 8;
-
-                if (spaceIdx < 0)
-                {
-                    step = args.ToInt();
-                }
-                else
-                {
-                    string stepStr = args.Substring(0, spaceIdx);
-                    string yawStr  = args.Substring(spaceIdx + 1, args.Length() - spaceIdx - 1);
-                    yawStr.TrimInPlace();
-                    step = stepStr.ToInt();
-                    int parsedYaw = yawStr.ToInt();
-                    if (parsedYaw > 0)
-                        genYawCount = parsedYaw;
-                }
-
-                if (step > 0)
-                    SendGenerateGrid(step, genYawCount);
-                else
-                    Print("[SSCollector] /ss-generate: missing or invalid step. Usage: /ss-generate <step> [yaw_count]");
-
-                return;
+                string numStr = msg.Substring(8, msg.Length() - 8);
+                numStr.TrimInPlace();
+                int parsed = numStr.ToInt();
+                if (parsed > 0)
+                    addYawCount = parsed;
             }
+            SendAddLocation(addYawCount);
+            return;
+        }
 
-            if (msg == "/ss-clear")
+        // /ss-generate <step> [N]  — step is required, N defaults to 8
+        if (msg.IndexOf("/ss-generate ") == 0)
+        {
+            string args = msg.Substring(13, msg.Length() - 13);
+            args.TrimInPlace();
+
+            int spaceIdx = args.IndexOf(" ");
+            int step, genYawCount = 8;
+
+            if (spaceIdx < 0)
             {
-                SendClearLocations();
-                return;
+                step = args.ToInt();
+            }
+            else
+            {
+                string stepStr = args.Substring(0, spaceIdx);
+                string yawStr  = args.Substring(spaceIdx + 1, args.Length() - spaceIdx - 1);
+                yawStr.TrimInPlace();
+                step = stepStr.ToInt();
+                int parsedYaw = yawStr.ToInt();
+                if (parsedYaw > 0)
+                    genYawCount = parsedYaw;
             }
 
-            if (msg == "/ss-reload")
-            {
-                SendReload();
-                return;
-            }
+            if (step > 0)
+                SendGenerateGrid(step, genYawCount);
+            else
+                Print("[SSCollector] /ss-generate: missing or invalid step. Usage: /ss-generate <step> [yaw_count]");
 
-            if (msg == "/ss-god")
-            {
-                SendToggleGod();
-                return;
-            }
+            return;
+        }
 
-            if (msg == "/ss-freecam")
-            {
-                FreeDebugCamera cam = FreeDebugCamera.GetInstance();
-                if (cam)
-                    cam.SetActive(!cam.IsActive());
-                return;
-            }
+        if (msg == "/ss-clear")
+        {
+            SendClearLocations();
+            return;
+        }
+
+        if (msg == "/ss-reload")
+        {
+            SendReload();
+            return;
+        }
+
+        if (msg == "/ss-god")
+        {
+            SendToggleGod();
+            return;
+        }
+
+        if (msg == "/ss-exile")
+        {
+            SendExile();
+            return;
+        }
+
+        if (msg == "/ss-freecam")
+        {
+            FreeDebugCamera cam = FreeDebugCamera.GetInstance();
+            if (cam)
+                cam.SetActive(!cam.IsActive());
+            return;
+        }
+
+        // /ss-goto <N>  — jump directly to location index N
+        if (msg.IndexOf("/ss-goto ") == 0)
+        {
+            string idxStr = msg.Substring(9, msg.Length() - 9);
+            idxStr.TrimInPlace();
+            int gotoIdx = idxStr.ToInt();
+            if (gotoIdx >= 0)
+                SendSetIndex(gotoIdx);
+            else
+                Print("[SSCollector] /ss-goto: invalid index. Usage: /ss-goto <N>");
+            return;
         }
     }
 
@@ -241,5 +272,30 @@ modded class MissionGameplay
         rpc.Send(player, SSCRpc.TOGGLE_GOD, true, null);
 
         Print("[SSCollector] Toggle god sent.");
+    }
+
+    protected void SendExile()
+    {
+        PlayerBase player = PlayerBase.Cast(GetGame().GetPlayer());
+        if (!player)
+            return;
+
+        ScriptRPC rpc = new ScriptRPC();
+        rpc.Send(player, SSCRpc.EXILE, true, null);
+
+        Print("[SSCollector] Exile sent.");
+    }
+
+    protected void SendSetIndex(int index)
+    {
+        PlayerBase player = PlayerBase.Cast(GetGame().GetPlayer());
+        if (!player)
+            return;
+
+        ScriptRPC rpc = new ScriptRPC();
+        rpc.Write(index);
+        rpc.Send(player, SSCRpc.SET_INDEX, true, null);
+
+        Print("[SSCollector] Set index sent. index=" + index);
     }
 }

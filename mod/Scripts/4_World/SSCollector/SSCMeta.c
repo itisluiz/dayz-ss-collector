@@ -2,7 +2,7 @@ class SSCMetaWriter
 {
     static int s_Counter = 0;
 
-    static void Write(PlayerBase player, vector cameraDir)
+    static void Write(PlayerBase player, vector cameraDir, int locationIndex)
     {
         if (!player)
             return;
@@ -37,6 +37,7 @@ class SSCMetaWriter
         }
 
         FPrintln(fh, "{");
+        FPrintln(fh, "    \"locationIndex\": " + locationIndex + ",");
         FPrintln(fh, "    \"map\": \"" + worldName + "\",");
         FPrintln(fh, "    \"position\": {");
         FPrintln(fh, "        \"x\": " + pos[0] + ",");
@@ -80,7 +81,7 @@ modded class PlayerBase
                 Print("[SSCollector] OnRPC CAPTURE_META: failed to read cameraDir");
                 return;
             }
-            SSCMetaWriter.Write(PlayerBase.Cast(this), cameraDir);
+            SSCMetaWriter.Write(PlayerBase.Cast(this), cameraDir, m_SSCLocIndex);
         }
     }
 }

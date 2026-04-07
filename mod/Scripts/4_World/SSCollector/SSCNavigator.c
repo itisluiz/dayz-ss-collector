@@ -121,28 +121,15 @@ modded class PlayerBase
     static float s_pFog[4]      = {  0.0,   0.0,   0.0,   0.0 };
     static float s_pRain[4]     = {  0.0,   0.0,   0.0,   0.0 };
 
-    // Server-side: step the index by `delta` (+1 next / -1 prev), apply the
-    // resulting location, and fire a SET_CAMERA reply to this player's client.
-    void SSC_Navigate(int delta)
+    // Server-side: apply the location at `index` — set time/weather and fire
+    // a SET_CAMERA RPC to this player's client. Returns false if invalid.
+    bool SSC_ApplyLocation(int index)
     {
-        int count = SSCNavigator.GetCount();
-        if (count == 0)
-        {
-            Print("[SSCollector] SSC_Navigate: no locations loaded — drop.");
-            return;
-        }
-
-        // First press always lands on index 0 regardless of direction.
-        if (m_SSCLocIndex < 0)
-            m_SSCLocIndex = 0;
-        else
-            m_SSCLocIndex = (m_SSCLocIndex + delta + count) % count;
-
-        SSCLocation loc = SSCNavigator.GetAt(m_SSCLocIndex);
+        SSCLocation loc = SSCNavigator.GetAt(index);
         if (!loc)
         {
-            Print("[SSCollector] SSC_Navigate: null entry at index " + m_SSCLocIndex);
-            return;
+            Print("[SSCollector] SSC_ApplyLocation: null entry at index " + index);
+            return false;
         }
 
         // ── Teleport ─────────────────────────────────────────────────────────
@@ -192,8 +179,46 @@ modded class PlayerBase
         if (loc.position)
             posStr = string.Format("(%1, %2, %3)", loc.position.x, loc.position.y, loc.position.z);
 
-        Print(string.Format("[SSCollector] SSC_Navigate: idx=%1/%2  pos=%3  time=%4  yaw=%5  pitch=%6",
-            m_SSCLocIndex, count - 1, posStr, loc.timeOfDay, loc.cameraYaw, loc.cameraPitch));
+        Print(string.Format("[SSCollector] SSC_ApplyLocation: idx=%1/%2  pos=%3  time=%4  yaw=%5  pitch=%6",
+            index, SSCNavigator.GetCount() - 1, posStr, loc.timeOfDay, loc.cameraYaw, loc.cameraPitch));
+        return true;
+    }
+
+    // Server-side: step the index by `delta` (+1 next / -1 prev), apply the
+    // resulting location, and fire a SET_CAMERA reply to this player's client.
+    void SSC_Navigate(int delta)
+    {
+        int count = SSCNavigator.GetCount();
+        if (count == 0)
+        {
+            Print("[SSCollector] SSC_Navigate: no locations loaded — drop.");
+            return;
+        }
+
+        // First press always lands on index 0 regardless of direction.
+        if (m_SSCLocIndex < 0)
+            m_SSCLocIndex = 0;
+        else
+            m_SSCLocIndex = (m_SSCLocIndex + delta + count) % count;
+
+        SSC_ApplyLocation(m_SSCLocIndex);
+    }
+
+    // Server-side: jump directly to `index`, clamp to valid range, apply location.
+    void SSC_GoTo(int index)
+    {
+        int count = SSCNavigator.GetCount();
+        if (count == 0)
+        {
+            Print("[SSCollector] SSC_GoTo: no locations loaded — drop.");
+            return;
+        }
+
+        if (index < 0) index = 0;
+        if (index >= count) index = count - 1;
+
+        m_SSCLocIndex = index;
+        SSC_ApplyLocation(m_SSCLocIndex);
     }
 
     // Server-side: generate location entries at the player's current position.
@@ -352,6 +377,18 @@ modded class PlayerBase
         Print("[SSCollector] God mode: " + m_SSCGodMode);
     }
 
+    // Server-side: teleport player to the map's northwest corner (config minX/minZ + 200m)
+    // so they are far from populated areas and won't spawn infected during a capture run.
+    void SSC_Exile()
+    {
+        SSCConfig cfg = SSCConfigManager.Get();
+        float x = cfg.mapMinX + 200;
+        float z = cfg.mapMinZ + 200;
+        float y = GetGame().SurfaceRoadY(x, z);
+        SetPosition(Vector(x, y, z));
+        Print(string.Format("[SSCollector] SSC_Exile: teleported to (%1, %2, %3)", x, y, z));
+    }
+
     // Server-side: wipe all saved locations and persist the empty list.
     void SSC_ClearLocations()
     {
@@ -475,6 +512,32 @@ modded class PlayerBase
                 return;
 
             SSC_ToggleGod();
+            return;
+        }
+
+        // ── EXILE  (client → server) ─────────────────────────────────────────
+        if (rpc_type == SSCRpc.EXILE)
+        {
+            if (!GetGame().IsServer())
+                return;
+
+            SSC_Exile();
+            return;
+        }
+
+        // ── SET_INDEX  (client → server) ─────────────────────────────────────
+        if (rpc_type == SSCRpc.SET_INDEX)
+        {
+            if (!GetGame().IsServer())
+                return;
+
+            int gotoIndex;
+            if (!ctx.Read(gotoIndex))
+            {
+                Print("[SSCollector] OnRPC SET_INDEX: could not read index");
+                return;
+            }
+            SSC_GoTo(gotoIndex);
             return;
         }
     }

@@ -9,5 +9,6 @@
     "server_host":      "127.0.0.1",
     "server_port":      2302,
     "server_extra_args": ["-filePatching"],
-    "client_extra_args": []
+    "client_extra_args": [],
+    "ahk_path":          "AutoHotkey64.exe"
 }

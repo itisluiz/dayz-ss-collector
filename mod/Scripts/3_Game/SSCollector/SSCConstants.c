@@ -20,4 +20,6 @@ class SSCRpc
     static const int GENERATE_GRID   = 20006;  // client → server: int step, int yawCount
     static const int RELOAD          = 20007;  // client → server: no payload
     static const int TOGGLE_GOD      = 20008;  // client → server: no payload
+    static const int SET_INDEX       = 20009;  // client → server: int index
+    static const int EXILE           = 20010;  // client → server: no payload
 }
