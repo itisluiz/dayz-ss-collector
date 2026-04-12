@@ -3,11 +3,13 @@
 
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
 import time
 import tkinter as tk
+from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import ttk
 
@@ -16,6 +18,45 @@ SCRIPTS_DIR = ROOT_DIR
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 from _common import find_logs, latest_log, load_settings  # type: ignore  # noqa: E402
+
+
+_PROGRESS_RE = re.compile(r'\[(\d+)/(\d+)\]')
+
+
+class ETATracker:
+    """Tracks progress lines like [N/M] and estimates time-to-completion."""
+
+    _MAX_SAMPLES = 20
+
+    def __init__(self):
+        self._samples: list[tuple[int, float]] = []  # (step, monotonic_time)
+        self._total: int | None = None
+
+    def update(self, step: int, total: int):
+        self._total = total
+        now = time.monotonic()
+        self._samples.append((step, now))
+        if len(self._samples) > self._MAX_SAMPLES:
+            self._samples.pop(0)
+
+    def reset(self):
+        self._samples.clear()
+        self._total = None
+
+    def eta_str(self) -> str:
+        if len(self._samples) < 2 or self._total is None:
+            return ""
+        first_step, first_time = self._samples[0]
+        last_step,  last_time  = self._samples[-1]
+        steps_done = last_step - first_step
+        if steps_done <= 0:
+            return ""
+        rate = (last_time - first_time) / steps_done  # seconds per step
+        remaining = self._total - last_step - 1
+        if remaining <= 0:
+            return "ETA: done"
+        eta_secs = int(rate * remaining)
+        return f"ETA: {timedelta(seconds=eta_secs)}"
 
 
 class FollowWorker:
@@ -46,9 +87,10 @@ class FollowWorker:
             self._out_queue.put(("err", f"No {self.kind} log found.\n"))
             return
 
-        self._emit(f"Now following: {current.name}\n")
+        self._emit(f"Now following: {current.name} (from end)\n")
 
         f = open(current, "r", errors="replace")
+        f.seek(0, 2)  # jump to end — skip existing content
         last_watchdog = time.monotonic()
         try:
             while not self._stop.is_set():
@@ -84,9 +126,10 @@ class FilteredFollowWorker(FollowWorker):
             self._out_queue.put(("err", f"No {self.kind} log found.\n"))
             return
 
-        self._emit(f"Now following: {current.name}\n")
+        self._emit(f"Now following: {current.name} (from end)\n")
 
         f = open(current, "r", errors="replace")
+        f.seek(0, 2)  # jump to end — skip existing content
         last_watchdog = time.monotonic()
         try:
             while not self._stop.is_set():
@@ -122,6 +165,8 @@ class DevToolkit(tk.Tk):
         self.minsize(700, 420)
         self._out_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._follow_workers: dict[str, FollowWorker] = {}
+        self._eta = ETATracker()
+        self._at_line_start = True
         self._build_ui()
         self._poll_output()
 
@@ -227,13 +272,21 @@ class DevToolkit(tk.Tk):
         self.output.tag_configure("err",    foreground="#f44747")
         self.output.tag_configure("server", foreground="#4ec9b0")
         self.output.tag_configure("client", foreground="#ce9178")
+        self.output.tag_configure("ts",     foreground="#555555")
 
         sb = ttk.Scrollbar(out_frame, orient="vertical", command=self.output.yview)
         sb.grid(row=0, column=1, sticky="ns")
         self.output["yscrollcommand"] = sb.set
 
-        ttk.Button(out_frame, text="Clear", command=self._clear_output).grid(
-            row=1, column=0, sticky="e", pady=(4, 0)
+        bottom_bar = ttk.Frame(out_frame)
+        bottom_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        bottom_bar.columnconfigure(0, weight=1)
+
+        self._eta_label = ttk.Label(bottom_bar, text="", foreground="#808080")
+        self._eta_label.grid(row=0, column=0, sticky="w")
+
+        ttk.Button(bottom_bar, text="Clear", command=self._clear_output).grid(
+            row=0, column=1, sticky="e"
         )
 
     def _on_follow_changed(self, *_):
@@ -242,12 +295,29 @@ class DevToolkit(tk.Tk):
 
     # --------------------------------------------------------- output helpers -
 
+    MAX_LINES = 5_000
+
     def _write(self, text: str, tag: str = ""):
+        if not text:
+            return
         self.output.configure(state="normal")
-        if tag:
-            self.output.insert("end", text, tag)
-        else:
-            self.output.insert("end", text)
+        # Split on newlines so we can inject a timestamp at the start of each
+        # new line of actual content.
+        segments = text.split("\n")
+        for i, seg in enumerate(segments):
+            if i > 0:
+                self.output.insert("end", "\n")
+                self._at_line_start = True
+            if seg:
+                if self._at_line_start:
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    self.output.insert("end", f"[{ts}] ", "ts")
+                    self._at_line_start = False
+                self.output.insert("end", seg, tag or "")
+        # Keep the widget bounded so long follow sessions don't bloat memory.
+        line_count = int(self.output.index("end-1c").split(".")[0])
+        if line_count > self.MAX_LINES:
+            self.output.delete("1.0", f"{line_count - self.MAX_LINES}.0")
         self.output.see("end")
         self.output.configure(state="disabled")
 
@@ -261,6 +331,11 @@ class DevToolkit(tk.Tk):
             while True:
                 tag, text = self._out_queue.get_nowait()
                 self._write(text, tag)
+                m = _PROGRESS_RE.search(text)
+                if m:
+                    self._eta.update(int(m.group(1)), int(m.group(2)))
+                    eta = self._eta.eta_str()
+                    self._eta_label.configure(text=eta)
         except queue.Empty:
             pass
         self.after(40, self._poll_output)
@@ -270,6 +345,8 @@ class DevToolkit(tk.Tk):
     def _run_async(self, script_path: Path, args: list[str], prefix: str = "", tag: str = ""):
         cmd = [sys.executable, "-u", str(script_path), *[str(a) for a in args]]
         self._out_queue.put(("cmd", f"\n$ {' '.join(cmd)}\n"))
+        self._eta.reset()
+        self._eta_label.configure(text="")
 
         def _worker():
             try:

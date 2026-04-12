@@ -1,3 +1,5 @@
 pywin32
 mss
 pynput
+colorama
+psutil

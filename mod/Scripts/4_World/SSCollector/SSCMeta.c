@@ -16,7 +16,14 @@ class SSCMetaWriter
         s_Counter++;
         string filename = outDir + "/ss-meta-" + s_Counter + ".json";
 
-        vector pos = player.GetPosition();
+        // Use the location's stored position, not the player's — the player is
+        // exiled to the map corner while the camera is at the actual capture spot.
+        vector pos;
+        SSCLocation loc = SSCNavigator.GetAt(locationIndex);
+        if (loc && loc.position)
+            pos = Vector(loc.position.x, loc.position.y, loc.position.z);
+        else
+            pos = player.GetPosition();
         float tod = GetGame().GetDayTime();
 
         string worldName;
