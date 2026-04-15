@@ -1,3 +1,7 @@
+// DayZ player eye height above the floor surface (metres).
+// A standing character is ~1.8 m tall; the camera sits at roughly 1.7 m.
+const float SSC_EYE_HEIGHT = 1.7;
+
 // Pending free-camera command written by PlayerBase.OnRPC (4_World) and
 // consumed by MissionGameplay.OnUpdate (5_Mission), where FreeDebugCamera lives.
 class SSCCameraCommand

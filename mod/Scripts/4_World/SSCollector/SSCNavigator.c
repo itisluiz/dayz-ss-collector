@@ -169,13 +169,13 @@ modded class PlayerBase
         GetGame().GetWorld().SetDate(year, month, day, newHour, newMinute);
 
         // ── Camera orientation → client ───────────────────────────────────────
-        // Send eye position (floor + 1.5 m) so the client can place FreeDebugCamera
+        // Send eye position (floor + SSC_EYE_HEIGHT) so the client can place FreeDebugCamera
         // at the exact spot without depending on position-replication timing.
-        float eyeX = 0, eyeY = 1.5, eyeZ = 0;
+        float eyeX = 0, eyeY = SSC_EYE_HEIGHT, eyeZ = 0;
         if (loc.position)
         {
             eyeX = loc.position.x;
-            eyeY = loc.position.y + 1.5;
+            eyeY = loc.position.y + SSC_EYE_HEIGHT;
             eyeZ = loc.position.z;
         }
         ScriptRPC rpc = new ScriptRPC();
@@ -240,7 +240,7 @@ modded class PlayerBase
         vector rawPos  = GetPosition();
         float  floorY  = GetGame().SurfaceRoadY(rawPos[0], rawPos[2]);
         vector snapPos = Vector(rawPos[0], floorY, rawPos[2]);
-        vector eyePos  = Vector(rawPos[0], floorY + 1.5, rawPos[2]);
+        vector eyePos  = Vector(rawPos[0], floorY + SSC_EYE_HEIGHT, rawPos[2]);
 
         float pitchDeg = -5.0;
         float yawStep  = 360.0 / yawCount;
@@ -320,7 +320,7 @@ modded class PlayerBase
                     }
 
                     vector snapPos = Vector(x, floorY, z);
-                    vector eyePos  = Vector(x, floorY + 1.5, z);
+                    vector eyePos  = Vector(x, floorY + SSC_EYE_HEIGHT, z);
 
                     for (int i = 0; i < yawCount; i++)
                     {
@@ -417,7 +417,7 @@ modded class PlayerBase
                 {
                     snapPos = validPoints[vi];
                     floorY  = snapPos[1];
-                    eyePos  = Vector(snapPos[0], floorY + 1.5, snapPos[2]);
+                    eyePos  = Vector(snapPos[0], floorY + SSC_EYE_HEIGHT, snapPos[2]);
 
                     for (i = 0; i < yawCount; i++)
                     {
