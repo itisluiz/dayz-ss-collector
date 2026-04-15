@@ -474,9 +474,10 @@ def main():
     # Each iteration sends /ss-goto {index} absolutely — no relative navigate
     # keybind, so m_SSCLocIndex can never drift regardless of skips or pauses.
     loc_list = locs.get("locations", [])
-    captured = 0
-    skipped  = 0
-    eta      = _ETA()
+    captured       = 0
+    skipped        = 0
+    eta            = _ETA()
+    last_preset    = None   # preset of the last location we actually navigated to
 
     def _preset_key(loc):
         w = loc.get("weather") or {}
@@ -504,11 +505,13 @@ def main():
         send_chat_command(f"/ss-goto {index}", ahk_exe)
 
         delay = args.delay
-        if index > 0 and index < len(loc_list):
-            if _preset_key(loc_list[index]) != _preset_key(loc_list[index - 1]):
+        if index < len(loc_list):
+            cur_preset = _preset_key(loc_list[index])
+            if last_preset is not None and cur_preset != last_preset:
                 delay = args.transition_delay
                 print(f"{_ts()}  {_Y}[transition]{_RST} preset change at {index} "
                       f"— waiting {delay:.0f}s...")
+            last_preset = cur_preset
         time.sleep(delay)
 
         if shutdown["requested"]:

@@ -74,6 +74,17 @@ class SSCNavigator
             Print("[SSCollector] SSCNavigator: saved " + s_Locations.Count() + " location(s).");
     }
 
+    // Returns true if floorY (from SurfaceRoadY) is significantly above raw terrain,
+    // indicating the point is on a building rooftop or tall prop rather than ground level.
+    // Roads sit within ~0.3 m of terrain, so the 2 m threshold avoids false positives on roads.
+    static const float ROOF_THRESHOLD = 2.0;
+
+    static bool IsOnRoof(float x, float floorY, float z)
+    {
+        float terrainY = GetGame().SurfaceY(x, z);
+        return (floorY - terrainY) > ROOF_THRESHOLD;
+    }
+
     // Returns false if the angle is blocked within minClear meters (facing a wall/cliff).
     static bool IsClearAngle(vector eyePos, float yawDeg, float pitchDeg, float maxDist, float minClear, Object ignore)
     {
@@ -270,7 +281,9 @@ modded class PlayerBase
     // Server-side: sweep a uniform grid over the map bounds from SSCConfig,
     // applying the same raycast filter and preset expansion as SSC_AddLocation.
     // Scale: step=500 on Chernarus ≈ 900 land points → up to ~28k entries.
-    void SSC_GenerateGrid(int step, int yawCount)
+    // noRoof: skip points where SurfaceRoadY exceeds raw terrain height by more than
+    //         SSCNavigator.ROOF_THRESHOLD (2 m) — filters rooftops and tall props.
+    void SSC_GenerateGrid(int step, int yawCount, bool noRoof = false)
     {
         SSCConfig cfg  = SSCConfigManager.Get();
         float minX     = cfg.mapMinX;
@@ -282,6 +295,7 @@ modded class PlayerBase
         float yawStep  = 360.0 / yawCount;
         int   added    = 0;
         int   seaSkip  = 0;
+        int   roofSkip = 0;
 
         // Preset is the outer loop so all entries for a given time are consecutive.
         // During playback, time only changes at group boundaries — no per-shot transitions.
@@ -298,6 +312,13 @@ modded class PlayerBase
                     }
 
                     float  floorY  = GetGame().SurfaceRoadY(x, z);
+
+                    if (noRoof && SSCNavigator.IsOnRoof(x, floorY, z))
+                    {
+                        if (p == 0) roofSkip++; // count once
+                        continue;
+                    }
+
                     vector snapPos = Vector(x, floorY, z);
                     vector eyePos  = Vector(x, floorY + 1.5, z);
 
@@ -327,8 +348,105 @@ modded class PlayerBase
         }
 
         SSCNavigator.Save();
-        Print(string.Format("[SSCollector] SSC_GenerateGrid: +%1 entries (step=%2, yaw=%3, seaSkip=%4, total=%5)",
-            added, step, yawCount, seaSkip, SSCNavigator.GetCount()));
+        Print(string.Format("[SSCollector] SSC_GenerateGrid: +%1 entries (step=%2, yaw=%3, seaSkip=%4, roofSkip=%5, total=%6)",
+            added, step, yawCount, seaSkip, roofSkip, SSCNavigator.GetCount()));
+    }
+
+    // Server-side: scatter `pointCount` random locations inside a circle of `radius` meters
+    // centred at (centerX, centerZ). Pitches are spread evenly from PITCH_MIN to PITCH_MAX
+    // across pitchCount steps; with pitchCount=1 a single -5° pitch is used.
+    // Loop order: preset → pitch → point → yaw, so time changes only 4 times during playback.
+    static const float PITCH_MIN = -15.0;
+    static const float PITCH_MAX =  10.0;
+
+    void SSC_DenseArea(float centerX, float centerZ, float radius, int pointCount, int yawCount, int pitchCount, bool noRoof)
+    {
+        float yawStep  = 360.0 / yawCount;
+        int   added    = 0;
+        int   attempts = 0;
+        int   maxAttempts = pointCount * 8;
+        float r, angle, x, z, floorY, pitchStep, pitchDeg, yawDeg;
+        int   pi, p, pIdx, vi, i;
+        vector snapPos, eyePos;
+
+        // Build pitch array
+        array<float> pitches = new array<float>();
+        if (pitchCount <= 1)
+        {
+            pitches.Insert(-5.0);
+        }
+        else
+        {
+            pitchStep = (PITCH_MAX - PITCH_MIN) / (pitchCount - 1);
+            for (pi = 0; pi < pitchCount; pi++)
+                pitches.Insert(PITCH_MIN + pitchStep * pi);
+        }
+
+        // Generate the random point set first so preset loop runs over a fixed list.
+        array<vector> validPoints = new array<vector>();
+
+        while (validPoints.Count() < pointCount && attempts < maxAttempts)
+        {
+            attempts++;
+
+            // Uniform distribution in a circle: r = radius * sqrt(U[0,1])
+            r     = radius * Math.Sqrt(Math.RandomFloat(0, 1));
+            angle = Math.RandomFloat(0, Math.PI * 2);
+            x     = centerX + r * Math.Sin(angle);
+            z     = centerZ + r * Math.Cos(angle);
+
+            if (GetGame().SurfaceIsSea(x, z))
+                continue;
+
+            floorY = GetGame().SurfaceRoadY(x, z);
+
+            if (noRoof && SSCNavigator.IsOnRoof(x, floorY, z))
+                continue;
+
+            validPoints.Insert(Vector(x, floorY, z));
+        }
+
+        // Preset outer loop keeps consecutive time grouping during playback
+        for (p = 0; p < 4; p++)
+        {
+            for (pIdx = 0; pIdx < pitches.Count(); pIdx++)
+            {
+                pitchDeg = pitches[pIdx];
+
+                for (vi = 0; vi < validPoints.Count(); vi++)
+                {
+                    snapPos = validPoints[vi];
+                    floorY  = snapPos[1];
+                    eyePos  = Vector(snapPos[0], floorY + 1.5, snapPos[2]);
+
+                    for (i = 0; i < yawCount; i++)
+                    {
+                        yawDeg = yawStep * i;
+                        if (!SSCNavigator.IsClearAngle(eyePos, yawDeg, pitchDeg, 100.0, 5.0, this))
+                            continue;
+
+                        SSCLocation loc      = new SSCLocation();
+                        loc.position         = new SSCLocationPos();
+                        loc.position.x       = snapPos[0];
+                        loc.position.y       = floorY;
+                        loc.position.z       = snapPos[2];
+                        loc.cameraYaw        = yawDeg;
+                        loc.cameraPitch      = pitchDeg;
+                        loc.timeOfDay        = s_pTime[p];
+                        loc.weather          = new SSCLocationWeather();
+                        loc.weather.overcast = s_pOvercast[p];
+                        loc.weather.fog      = s_pFog[p];
+                        loc.weather.rain     = s_pRain[p];
+                        SSCNavigator.AppendLocation(loc);
+                        added++;
+                    }
+                }
+            }
+        }
+
+        SSCNavigator.Save();
+        Print(string.Format("[SSCollector] SSC_DenseArea: +%1 entries (r=%2, points=%3/%4, yaw=%5, pitches=%6, total=%7)",
+            added, radius, validPoints.Count(), pointCount, yawCount, pitches.Count(), SSCNavigator.GetCount()));
     }
 
     // Server-side: re-read locations.json into memory (hot-reload without restart).
@@ -480,8 +598,8 @@ modded class PlayerBase
             if (!GetGame().IsServer())
                 return;
 
-            int gridStep, gridYawCount;
-            if (!ctx.Read(gridStep) || !ctx.Read(gridYawCount))
+            int gridStep, gridYawCount, gridNoRoof;
+            if (!ctx.Read(gridStep) || !ctx.Read(gridYawCount) || !ctx.Read(gridNoRoof))
             {
                 Print("[SSCollector] OnRPC GENERATE_GRID: could not read params");
                 return;
@@ -491,7 +609,7 @@ modded class PlayerBase
                 Print("[SSCollector] OnRPC GENERATE_GRID: bad params step=" + gridStep + " yaw=" + gridYawCount);
                 return;
             }
-            SSC_GenerateGrid(gridStep, gridYawCount);
+            SSC_GenerateGrid(gridStep, gridYawCount, gridNoRoof != 0);
             return;
         }
 
@@ -512,6 +630,38 @@ modded class PlayerBase
                 return;
 
             SSC_ToggleGod();
+            return;
+        }
+
+        // ── DENSE_AREA  (client → server) ────────────────────────────────────
+        if (rpc_type == SSCRpc.DENSE_AREA)
+        {
+            if (!GetGame().IsServer())
+                return;
+
+            float daCenterX, daCenterZ, daRadius;
+            int   daPointCount, daYawCount, daPitchCount, daNoRoof;
+            if (!ctx.Read(daCenterX) || !ctx.Read(daCenterZ) || !ctx.Read(daRadius))
+            {
+                Print("[SSCollector] OnRPC DENSE_AREA: could not read center/radius");
+                return;
+            }
+            if (!ctx.Read(daPointCount) || !ctx.Read(daYawCount) || !ctx.Read(daPitchCount) || !ctx.Read(daNoRoof))
+            {
+                Print("[SSCollector] OnRPC DENSE_AREA: could not read counts");
+                return;
+            }
+            if (daRadius <= 0 || daRadius > 5000 || daPointCount < 1 || daPointCount > 500)
+            {
+                Print("[SSCollector] OnRPC DENSE_AREA: bad params");
+                return;
+            }
+            if (daYawCount < 1 || daYawCount > 72 || daPitchCount < 1 || daPitchCount > 8)
+            {
+                Print("[SSCollector] OnRPC DENSE_AREA: bad params");
+                return;
+            }
+            SSC_DenseArea(daCenterX, daCenterZ, daRadius, daPointCount, daYawCount, daPitchCount, daNoRoof != 0);
             return;
         }
 

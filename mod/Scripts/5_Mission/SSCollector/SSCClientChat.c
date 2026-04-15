@@ -82,6 +82,18 @@ modded class MissionGameplay
     // Dispatch an already-lowercased /ss-* command string.
     protected void HandleSSCCommand(string msg)
     {
+        // Hoisted locals — Enforce Script requires all declarations at function scope.
+        string args, cleaned, numStr, stepStr, yawStr, idxStr, remaining;
+        int flagIdx, spaceIdx, parsed, parsedYaw, parsedPitch;
+        int step, genYawCount, addYawCount, gotoIdx, spIdx;
+        int denseCount, denseYaw, densePitch;
+        float denseRadius, centerX, centerZ, camX, camY, camZ;
+        bool noRoof;
+        array<string> tokens;
+        vector camPos, playerPos;
+        FreeDebugCamera cam;
+        PlayerBase localPlayer;
+
         if (msg == "/ss-meta")
         {
             SendCaptureMeta();
@@ -91,12 +103,12 @@ modded class MissionGameplay
         // /ss-add [N]  — N is optional, defaults to 8
         if (msg == "/ss-add" || msg.IndexOf("/ss-add ") == 0)
         {
-            int addYawCount = 8;
+            addYawCount = 8;
             if (msg.Length() > 8)
             {
-                string numStr = msg.Substring(8, msg.Length() - 8);
+                numStr = msg.Substring(8, msg.Length() - 8);
                 numStr.TrimInPlace();
-                int parsed = numStr.ToInt();
+                parsed = numStr.ToInt();
                 if (parsed > 0)
                     addYawCount = parsed;
             }
@@ -104,14 +116,24 @@ modded class MissionGameplay
             return;
         }
 
-        // /ss-generate <step> [N]  — step is required, N defaults to 8
+        // /ss-generate <step> [N] [--no-roof]  — step is required, N defaults to 8
         if (msg.IndexOf("/ss-generate ") == 0)
         {
-            string args = msg.Substring(13, msg.Length() - 13);
+            args = msg.Substring(13, msg.Length() - 13);
             args.TrimInPlace();
 
-            int spaceIdx = args.IndexOf(" ");
-            int step, genYawCount = 8;
+            noRoof = args.IndexOf("--no-roof") >= 0;
+            if (noRoof)
+            {
+                flagIdx = args.IndexOf("--no-roof");
+                cleaned = args.Substring(0, flagIdx);
+                cleaned.TrimInPlace();
+                args = cleaned;
+            }
+
+            spaceIdx = args.IndexOf(" ");
+            step = 0;
+            genYawCount = 8;
 
             if (spaceIdx < 0)
             {
@@ -119,19 +141,19 @@ modded class MissionGameplay
             }
             else
             {
-                string stepStr = args.Substring(0, spaceIdx);
-                string yawStr  = args.Substring(spaceIdx + 1, args.Length() - spaceIdx - 1);
+                stepStr = args.Substring(0, spaceIdx);
+                yawStr  = args.Substring(spaceIdx + 1, args.Length() - spaceIdx - 1);
                 yawStr.TrimInPlace();
                 step = stepStr.ToInt();
-                int parsedYaw = yawStr.ToInt();
+                parsedYaw = yawStr.ToInt();
                 if (parsedYaw > 0)
                     genYawCount = parsedYaw;
             }
 
             if (step > 0)
-                SendGenerateGrid(step, genYawCount);
+                SendGenerateGrid(step, genYawCount, noRoof);
             else
-                Print("[SSCollector] /ss-generate: missing or invalid step. Usage: /ss-generate <step> [yaw_count]");
+                Print("[SSCollector] /ss-generate: missing or invalid step. Usage: /ss-generate <step> [yaw_count] [--no-roof]");
 
             return;
         }
@@ -160,20 +182,155 @@ modded class MissionGameplay
             return;
         }
 
+        // /ss-dense <radius> <count> [yaw_count] [pitch_count] [--no-roof]
+        // Center: freecam position if active, else player position.
+        // Pitches default to 3 (spread -15° to +10°); --no-roof is on by default.
+        if (msg.IndexOf("/ss-dense ") == 0)
+        {
+            args = msg.Substring(10, msg.Length() - 10);
+            args.TrimInPlace();
+
+            noRoof = true;
+            if (args.IndexOf("--no-roof") >= 0)
+            {
+                flagIdx = args.IndexOf("--no-roof");
+                cleaned = args.Substring(0, flagIdx);
+                cleaned.TrimInPlace();
+                args = cleaned;
+            }
+
+            tokens = new array<string>();
+            remaining = args;
+            while (remaining.Length() > 0)
+            {
+                spIdx = remaining.IndexOf(" ");
+                if (spIdx < 0)
+                {
+                    tokens.Insert(remaining);
+                    break;
+                }
+                tokens.Insert(remaining.Substring(0, spIdx));
+                remaining = remaining.Substring(spIdx + 1, remaining.Length() - spIdx - 1);
+                remaining.TrimInPlace();
+            }
+
+            if (tokens.Count() < 2)
+            {
+                Print("[SSCollector] /ss-dense: Usage: /ss-dense <radius> <count> [yaw_count] [pitch_count] [--no-roof]");
+                return;
+            }
+
+            denseRadius = tokens[0].ToFloat();
+            denseCount  = tokens[1].ToInt();
+            denseYaw    = 8;
+            densePitch  = 3;
+
+            if (tokens.Count() >= 3)
+            {
+                parsedYaw = tokens[2].ToInt();
+                if (parsedYaw > 0)
+                    denseYaw = parsedYaw;
+            }
+            if (tokens.Count() >= 4)
+            {
+                parsedPitch = tokens[3].ToInt();
+                if (parsedPitch > 0)
+                    densePitch = parsedPitch;
+            }
+
+            if (denseRadius <= 0 || denseCount <= 0)
+            {
+                Print("[SSCollector] /ss-dense: invalid radius or count.");
+                return;
+            }
+
+            cam = FreeDebugCamera.GetInstance();
+            if (cam && cam.IsActive())
+            {
+                camPos  = cam.GetPosition();
+                centerX = camPos[0];
+                centerZ = camPos[2];
+            }
+            else
+            {
+                localPlayer = PlayerBase.Cast(GetGame().GetPlayer());
+                if (!localPlayer)
+                    return;
+                playerPos = localPlayer.GetPosition();
+                centerX   = playerPos[0];
+                centerZ   = playerPos[2];
+            }
+
+            SendDenseArea(centerX, centerZ, denseRadius, denseCount, denseYaw, densePitch, noRoof);
+            return;
+        }
+
         if (msg == "/ss-freecam")
         {
-            FreeDebugCamera cam = FreeDebugCamera.GetInstance();
+            cam = FreeDebugCamera.GetInstance();
             if (cam)
                 cam.SetActive(!cam.IsActive());
+            return;
+        }
+
+        // /ss-cam <x> <z>        — move freecam to x, z at SurfaceRoadY + 5 m
+        // /ss-cam <x> <y> <z>    — move freecam to exact x, y, z
+        if (msg.IndexOf("/ss-cam ") == 0)
+        {
+            args = msg.Substring(8, msg.Length() - 8);
+            args.TrimInPlace();
+
+            tokens = new array<string>();
+            remaining = args;
+            while (remaining.Length() > 0)
+            {
+                spIdx = remaining.IndexOf(" ");
+                if (spIdx < 0)
+                {
+                    tokens.Insert(remaining);
+                    break;
+                }
+                tokens.Insert(remaining.Substring(0, spIdx));
+                remaining = remaining.Substring(spIdx + 1, remaining.Length() - spIdx - 1);
+                remaining.TrimInPlace();
+            }
+
+            if (tokens.Count() == 2)
+            {
+                camX = tokens[0].ToFloat();
+                camZ = tokens[1].ToFloat();
+                camY = GetGame().SurfaceRoadY(camX, camZ) + 5.0;
+            }
+            else if (tokens.Count() >= 3)
+            {
+                camX = tokens[0].ToFloat();
+                camY = tokens[1].ToFloat();
+                camZ = tokens[2].ToFloat();
+            }
+            else
+            {
+                Print("[SSCollector] /ss-cam: Usage: /ss-cam <x> <z>  or  /ss-cam <x> <y> <z>");
+                return;
+            }
+
+            cam = FreeDebugCamera.GetInstance();
+            if (!cam)
+            {
+                Print("[SSCollector] /ss-cam: FreeDebugCamera not available.");
+                return;
+            }
+            cam.SetPosition(Vector(camX, camY, camZ));
+            cam.SetActive(true);
+            Print(string.Format("[SSCollector] /ss-cam: moved to (%1, %2, %3)", camX, camY, camZ));
             return;
         }
 
         // /ss-goto <N>  — jump directly to location index N
         if (msg.IndexOf("/ss-goto ") == 0)
         {
-            string idxStr = msg.Substring(9, msg.Length() - 9);
+            idxStr = msg.Substring(9, msg.Length() - 9);
             idxStr.TrimInPlace();
-            int gotoIdx = idxStr.ToInt();
+            gotoIdx = idxStr.ToInt();
             if (gotoIdx >= 0)
                 SendSetIndex(gotoIdx);
             else
@@ -236,18 +393,23 @@ modded class MissionGameplay
         Print("[SSCollector] Clear locations sent.");
     }
 
-    protected void SendGenerateGrid(int step, int yawCount)
+    protected void SendGenerateGrid(int step, int yawCount, bool noRoof = false)
     {
         PlayerBase player = PlayerBase.Cast(GetGame().GetPlayer());
         if (!player)
             return;
 
+        int noRoofInt = 0;
+        if (noRoof)
+            noRoofInt = 1;
+
         ScriptRPC rpc = new ScriptRPC();
         rpc.Write(step);
         rpc.Write(yawCount);
+        rpc.Write(noRoofInt);
         rpc.Send(player, SSCRpc.GENERATE_GRID, true, null);
 
-        Print("[SSCollector] Generate grid sent. step=" + step + " yawCount=" + yawCount);
+        Print("[SSCollector] Generate grid sent. step=" + step + " yawCount=" + yawCount + " noRoof=" + noRoof);
     }
 
     protected void SendReload()
@@ -284,6 +446,30 @@ modded class MissionGameplay
         rpc.Send(player, SSCRpc.EXILE, true, null);
 
         Print("[SSCollector] Exile sent.");
+    }
+
+    protected void SendDenseArea(float centerX, float centerZ, float radius, int pointCount, int yawCount, int pitchCount, bool noRoof)
+    {
+        PlayerBase player = PlayerBase.Cast(GetGame().GetPlayer());
+        if (!player)
+            return;
+
+        int noRoofInt = 0;
+        if (noRoof)
+            noRoofInt = 1;
+
+        ScriptRPC rpc = new ScriptRPC();
+        rpc.Write(centerX);
+        rpc.Write(centerZ);
+        rpc.Write(radius);
+        rpc.Write(pointCount);
+        rpc.Write(yawCount);
+        rpc.Write(pitchCount);
+        rpc.Write(noRoofInt);
+        rpc.Send(player, SSCRpc.DENSE_AREA, true, null);
+
+        Print(string.Format("[SSCollector] Dense area sent. center=(%1, %2) r=%3 count=%4 yaw=%5 pitch=%6 noRoof=%7",
+            centerX, centerZ, radius, pointCount, yawCount, pitchCount, noRoof));
     }
 
     protected void SendSetIndex(int index)

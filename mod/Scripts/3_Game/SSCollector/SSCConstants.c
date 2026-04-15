@@ -22,4 +22,5 @@ class SSCRpc
     static const int TOGGLE_GOD      = 20008;  // client → server: no payload
     static const int SET_INDEX       = 20009;  // client → server: int index
     static const int EXILE           = 20010;  // client → server: no payload
+    static const int DENSE_AREA      = 20011;  // client → server: float centerX, centerZ, float radius, int pointCount, int yawCount, int pitchCount, int noRoof
 }
