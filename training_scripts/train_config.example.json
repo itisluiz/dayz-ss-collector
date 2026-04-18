@@ -1,0 +1,20 @@
+{
+  "dataset_name": "chernarus-v1",
+  "map": "chernarusplus",
+  "model": "tf_efficientnet_b3.ns_jft_in1k",
+  "image_size": [360, 640],
+  "batch_size": 48,
+  "epochs": 30,
+  "lr": 0.0001,
+  "backbone_lr": null,
+  "weight_decay": 0.0001,
+  "dropout": 0.3,
+  "warmup_epochs": 2,
+  "scheduler": "cosine",
+  "grad_clip": 1.0,
+  "workers": 4,
+  "amp": true,
+  "save_every": 5,
+  "val_every": 1,
+  "early_stop_patience": 7
+}

@@ -125,7 +125,6 @@ def build_transform(image_size: tuple[int, int], augment: bool = False):
     ops = [transforms.Resize((h, w))]
     if augment:
         ops += [
-            transforms.RandomHorizontalFlip(),
             transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
         ]
     ops += [transforms.ToTensor(), transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)]
@@ -234,16 +233,19 @@ def save_inference_artifact(path: Path, model, args, bounds: dict):
     }, path)
 
 
-def maybe_push_blob(local_path: Path, blob_path: str, conn_str: str, container: str):
+def maybe_push_blob(local_path: Path, blob_path: str, conn_str: str, container: str,
+                    silent: bool = False):
     try:
         from azure.storage.blob import BlobServiceClient
         client = BlobServiceClient.from_connection_string(conn_str)
         bc = client.get_blob_client(container=container, blob=blob_path)
         with open(local_path, "rb") as f:
             bc.upload_blob(f, overwrite=True)
-        print(f"  [blob] pushed → {container}/{blob_path}")
+        if not silent:
+            print(f"  [blob] pushed → {container}/{blob_path}")
     except Exception as exc:
-        print(f"  [WARN] blob push failed: {exc}")
+        if not silent:
+            print(f"  [WARN] blob push failed: {exc}")
 
 
 # ── Dataset auto-download ─────────────────────────────────────────────────────
@@ -330,7 +332,7 @@ def parse_args() -> argparse.Namespace:
                    help="Map key used to read bounds from dataset_info.json")
     g.add_argument("--val-split", default="val", choices=["val", "test"],
                    help="Dataset split used for validation")
-    g.add_argument("--image-size", nargs=2, type=int, default=[300, 300],
+    g.add_argument("--image-size", nargs=2, type=int, default=[360, 640],
                    metavar=("H", "W"), help="Spatial size fed to the backbone")
     g.add_argument("--limit", type=int, default=0,
                    help="Cap samples per split for quick dry runs (0 = no limit)")
@@ -366,6 +368,8 @@ def parse_args() -> argparse.Namespace:
                    help="Enable automatic mixed precision (fp16) — recommended on any modern GPU")
     g.add_argument("--grad-clip", type=float, default=1.0,
                    help="Max gradient norm (0 = disabled)")
+    g.add_argument("--early-stop", type=int, default=0, metavar="PATIENCE",
+                   help="Stop if val error has not improved for N epochs (0 = disabled)")
     g.add_argument("--workers", type=int, default=4,
                    help="DataLoader worker processes")
     g.add_argument("--seed", type=int, default=42)
@@ -479,6 +483,7 @@ def main():
         print(f"Backbone frozen for first {args.freeze_backbone_epochs} epoch(s)")
 
     push_blob = bool(args.blob_conn_str) and not args.no_push_blob
+    no_improve_streak = 0
 
     print(f"\nRun     : {args.run_name}")
     print(f"Output  : {out_dir}")
@@ -511,6 +516,7 @@ def main():
         log = (f"Epoch {epoch+1:3d}/{args.epochs}"
                f"  train loss={train_loss:.4f}  err={train_err:.1f}m")
 
+        val_loss = val_err = None
         if (epoch + 1) % args.val_every == 0:
             val_loss, val_err = run_epoch(
                 model, val_loader, criterion, bounds, device, args.amp,
@@ -521,6 +527,7 @@ def main():
 
             if val_err < best_err_m:
                 best_err_m = val_err
+                no_improve_streak = 0
                 best_path  = out_dir / "best.pth"
                 save_inference_artifact(best_path, model, args, bounds)
                 log += "  ← best"
@@ -528,8 +535,43 @@ def main():
                     maybe_push_blob(best_path,
                                     f"checkpoints/{args.run_name}/best.pth",
                                     args.blob_conn_str, args.blob_container)
+            else:
+                no_improve_streak += 1
+
+            gap_pct = (val_err - train_err) / max(val_err, 1e-9) * 100
+            if gap_pct > 25:
+                log += f"  [!overfit gap={gap_pct:.0f}%]"
 
         print(log)
+
+        # ── Per-epoch JSONL metrics log ────────────────────────────────────────
+        log_entry: dict = {
+            "epoch":       epoch + 1,
+            "train_loss":  round(train_loss, 6),
+            "train_err_m": round(train_err, 2),
+            "ts":          datetime.now(timezone.utc).isoformat(),
+        }
+        if val_err is not None:
+            log_entry.update({
+                "val_loss":          round(val_loss, 6),
+                "val_err_m":         round(val_err, 2),
+                "best_val_err_m":    round(best_err_m, 2),
+                "no_improve_streak": no_improve_streak,
+            })
+        with open(out_dir / "train_log.jsonl", "a") as _lf:
+            _lf.write(json.dumps(log_entry) + "\n")
+        if push_blob:
+            maybe_push_blob(out_dir / "train_log.jsonl",
+                            f"logs/{args.run_name}.jsonl",
+                            args.blob_conn_str, args.blob_container, silent=True)
+
+        # ── Early stopping ─────────────────────────────────────────────────────
+        if val_err is not None and args.early_stop > 0 and no_improve_streak >= args.early_stop:
+            print(f"\n[EARLY STOP] Val error has not improved for {no_improve_streak} epoch(s) "
+                  f"(patience={args.early_stop}).")
+            print(f"  Best val: {best_err_m:.1f} m")
+            print(f"  Suggestions: lower --lr, increase augmentation, or collect more data.")
+            break
 
         if (epoch + 1) % args.save_every == 0:
             ckpt_name = f"checkpoint_epoch_{epoch+1:03d}.pth"
