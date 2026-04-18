@@ -46,13 +46,14 @@ SCRIPT_DIR="/tmp/dayz-training"
 REPO_RAW="https://raw.githubusercontent.com/itisluiz/dayz-ss-collector/main/training_scripts"
 
 # ── Parse args ────────────────────────────────────────────────────────────────
-if [[ $# -lt 1 ]]; then
-    echo "Usage: vm_bootstrap.sh <azure-conn-str> [--container <name>] [--dataset-path <path>] [--resume <run>] [--no-resume]"
-    exit 1
+if [[ $# -ge 1 && "$1" != --* ]]; then
+    CONN_STR="$1"
+    shift
+elif [[ -n "${DAYZ_CONN_STR:-}" ]]; then
+    CONN_STR="$DAYZ_CONN_STR"
+else
+    die "No connection string provided. Pass it as the first argument or set \$DAYZ_CONN_STR."
 fi
-
-CONN_STR="$1"
-shift
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
