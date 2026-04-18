@@ -350,23 +350,29 @@ fi
 # ── 8. Launch training ────────────────────────────────────────────────────────
 hdr "Training"
 
-LOG_FILE="/tmp/dayz_train_$(date +%Y%m%d_%H%M%S).log"
-log "Log file: $LOG_FILE"
+LOG_FILE="/root/dayz_train_$(date +%Y%m%d_%H%M%S).log"
+
+# Write a persistent runner script so tmux has something clean to execute
+cat > /root/dayz_run.sh << RUNEOF
+#!/bin/bash
+export DAYZ_CONN_STR='$(printf '%s' "$CONN_STR" | sed "s/'/'\\\\''/g")'
+$TRAIN_CMD
+RUNEOF
+chmod +x /root/dayz_run.sh
+
 echo
 echo -e "${BOLD}Command:${NC}"
 echo "$TRAIN_CMD" | sed 's/^/  /'
 echo
+log "Log file : $LOG_FILE"
+log "Runner   : /root/dayz_run.sh"
 
-# Export conn str so train.py picks it up via the $DAYZ_CONN_STR reference in the command
-export DAYZ_CONN_STR="$CONN_STR"
+# Kill any previous training session before starting a new one
+tmux kill-session -t training 2>/dev/null || true
 
-# Evaluate the command (it references $DAYZ_CONN_STR)
-eval "$TRAIN_CMD" 2>&1 | tee "$LOG_FILE"
-TRAIN_EXIT=${PIPESTATUS[0]}
+tmux new-session -d -s training "bash /root/dayz_run.sh 2>&1 | tee '$LOG_FILE'; echo '--- training exited \$? ---'"
 
+ok "Training launched in tmux session 'training'"
 echo
-if [[ $TRAIN_EXIT -eq 0 ]]; then
-    ok "Training complete. Log saved to $LOG_FILE"
-else
-    die "train.py exited with code $TRAIN_EXIT. Log: $LOG_FILE"
-fi
+echo -e "  Attach any time:  ${BOLD}tmux attach -t training${NC}"
+echo -e "  Follow log:       ${BOLD}tail -f $LOG_FILE${NC}"
