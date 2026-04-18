@@ -116,7 +116,7 @@ ok "Scripts downloaded to $SCRIPT_DIR"
 # ── 4. Python packages ────────────────────────────────────────────────────────
 hdr "Python packages"
 
-pip3 install -q -r "$SCRIPT_DIR/requirements.txt"
+pip3 install --no-input -r "$SCRIPT_DIR/requirements.txt"
 ok "Dependencies installed"
 
 # ── 5. Blob config + SAS + checkpoint discovery ───────────────────────────────
@@ -352,27 +352,11 @@ hdr "Training"
 
 LOG_FILE="/root/dayz_train_$(date +%Y%m%d_%H%M%S).log"
 
-# Write a persistent runner script so tmux has something clean to execute
-cat > /root/dayz_run.sh << RUNEOF
-#!/bin/bash
-export DAYZ_CONN_STR='$(printf '%s' "$CONN_STR" | sed "s/'/'\\\\''/g")'
-$TRAIN_CMD
-RUNEOF
-chmod +x /root/dayz_run.sh
-
 echo
 echo -e "${BOLD}Command:${NC}"
 echo "$TRAIN_CMD" | sed 's/^/  /'
 echo
-log "Log file : $LOG_FILE"
-log "Runner   : /root/dayz_run.sh"
+log "Log file: $LOG_FILE"
 
-# Kill any previous training session before starting a new one
-tmux kill-session -t training 2>/dev/null || true
-
-tmux new-session -d -s training "bash /root/dayz_run.sh 2>&1 | tee '$LOG_FILE'; echo '--- training exited \$? ---'"
-
-ok "Training launched in tmux session 'training'"
-echo
-echo -e "  Attach any time:  ${BOLD}tmux attach -t training${NC}"
-echo -e "  Follow log:       ${BOLD}tail -f $LOG_FILE${NC}"
+export DAYZ_CONN_STR="$CONN_STR"
+eval "$TRAIN_CMD" 2>&1 | tee "$LOG_FILE"
